@@ -53,6 +53,7 @@ export default defineConfig({
     react(),
     vitePluginSemi({
       cssLayer: true,
+      autoImportCss: true,
     }),
   ],
   optimizeDeps: {
