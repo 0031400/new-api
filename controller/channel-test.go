@@ -47,6 +47,14 @@ func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointTyp
 	if normalized != "" {
 		return normalized
 	}
+	if channel != nil {
+		if channel.Type == constant.ChannelTypeOpenAIRespOnly {
+			return string(constant.EndpointTypeOpenAIResponse)
+		}
+		if channel.Type == constant.ChannelTypeOpenAIChatOnly {
+			return string(constant.EndpointTypeOpenAI)
+		}
+	}
 	if strings.HasSuffix(modelName, ratio_setting.CompactModelSuffix) {
 		return string(constant.EndpointTypeOpenAIResponseCompact)
 	}

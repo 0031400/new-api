@@ -70,6 +70,68 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
 	}
 	adaptor.Init(info)
+
+	if info.ChannelType == appconstant.ChannelTypeOpenAIChatOnly {
+		chatReq, err := service.ResponsesRequestToChatCompletionsRequest(request)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		}
+		convertedRequest, err := adaptor.ConvertOpenAIRequest(c, info, chatReq)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		}
+		relaycommon.AppendRequestConversionFromRequest(info, convertedRequest)
+		jsonData, err := common.Marshal(convertedRequest)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		}
+		jsonData, err = relaycommon.RemoveDisabledFields(jsonData, info.ChannelOtherSettings, info.ChannelSetting.PassThroughBodyEnabled)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		}
+		if len(info.ParamOverride) > 0 {
+			jsonData, err = relaycommon.ApplyParamOverrideWithRelayInfo(jsonData, info)
+			if err != nil {
+				return newAPIErrorFromParamOverride(err)
+			}
+		}
+
+		savedRelayMode := info.RelayMode
+		savedRequestURLPath := info.RequestURLPath
+		defer func() {
+			info.RelayMode = savedRelayMode
+			info.RequestURLPath = savedRequestURLPath
+		}()
+		info.RelayMode = relayconstant.RelayModeChatCompletions
+		info.RequestURLPath = "/v1/chat/completions"
+
+		resp, err := adaptor.DoRequest(c, info, bytes.NewBuffer(jsonData))
+		if err != nil {
+			return types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError)
+		}
+		var httpResp *http.Response
+		if resp != nil {
+			httpResp = resp.(*http.Response)
+			if httpResp.StatusCode != http.StatusOK {
+				newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)
+				service.ResetStatusCode(newAPIError, c.GetString("status_code_mapping"))
+				return newAPIError
+			}
+		}
+		usage, newAPIError := adaptor.DoResponse(c, httpResp, info)
+		if newAPIError != nil {
+			service.ResetStatusCode(newAPIError, c.GetString("status_code_mapping"))
+			return newAPIError
+		}
+		usageDto := usage.(*dto.Usage)
+		if strings.HasPrefix(info.OriginModelName, "gpt-4o-audio") {
+			service.PostAudioConsumeQuota(c, info, usageDto, "")
+		} else {
+			service.PostTextConsumeQuota(c, info, usageDto, nil)
+		}
+		return nil
+	}
+
 	var requestBody io.Reader
 	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
 		storage, err := common.GetBodyStorage(c)
